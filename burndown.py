@@ -12,34 +12,18 @@ from config import TRELLO_API_KEY, TRELLO_API_TOKEN
 from pprint import pprint
 
 parser = argparse.ArgumentParser(description='Generate sprint burndown chart from Trello board.')
-parser.add_argument('--url',dest='url',help='Use URL for Trello board')
-#parser.add_argument('--batch',dest='batchFilename',help='Use a batch (.txt) file of URL(s) for Trello board(s). Each URL on a newline.')
-parser.add_argument('-f',dest='filename',help='Use local file from Trello board JSON export')
-#parser.add_argument('--labelMap',dest='labelMap',help='Label mapping. The system expects the following size labels\n\t["Size - Small","Size - Medium", "Size - Large"]\nAnd the following kanban lists\n\t["US - Backlog","US - In Progress", "US - Done", "Biz/Dev Backlog", "Biz/Dev In Progress", "Biz/Dev In Review","Biz/Dev Done"]')
+parser.add_argument('boards',help='File containing board(s) and corresponding configurations')
 
-querystring = {"actions":"none","boardStars":"none","cards":"all","card_pluginData":"false","checklists":"none","customFields":"false","fields":"name,desc,descData,closed,idOrganization,pinned,url,shortUrl,prefs,labelNames","lists":"open","labels": "all","members":"all","memberships":"none","membersInvited":"none","membersInvited_fields":"all","pluginData":"false","organization":"false","organization_pluginData":"false","myPrefs":"false","tags":"false","key":TRELLO_API_KEY,"token": TRELLO_API_TOKEN}
+querystring = {"actions":"none","boardStars":"none","cards":"all","card_pluginData":"false","checklists":"none","customFields":"false","fields":"name,desc,descData,closed,idOrganization,pinned,url,shortUrl,prefs,labelNames,archive","lists":"open","labels": "all","members":"all","memberships":"none","membersInvited":"none","membersInvited_ields":"all","pluginData":"false","organization":"false","organization_pluginData":"false","myPrefs":"false","tags":"false","key":TRELLO_API_KEY,"token": TRELLO_API_TOKEN}
 
-
-teamKanbanLabels = {'User Story Backlog': 'US - Backlog',
-    'User Story Doing': 'US - In Progress',
-    'User Story Done': 'US - Done',
-    'Biz/Dev Backlog': 'Biz/Dev Backlog',
-    'Biz/Dev Doing': 'Biz/Dev In Progress',
-    'Biz/Dev Reviewing': 'Biz/Dev In Review',
-    'Biz/Dev Done': 'Biz/Dev Done' }
+teamKanbanLabels = {}
 kanbanLists = {}
-
-teamPriorityLabels = {'Priority - High': 'Priority - High',
-    'Priority - Medium': 'Priority - Moderate',
-    'Priority - Low': 'Priority - Low'}
+teamPriorityLabels = {}
 priorityLabels = {}
-
-teamSizeLabels = {'Size - Small': 'Size - Small',
-    'Size - Moderate': 'Size - Medium',
-    'Size - Large': 'Size - Large'}
+teamSizeLabels = {}
 sizeLabels = {}
-
-skipMembers = ['Jeffrey McDaniel','Brian Crites'] # List of member names to ignore
+boards = []
+skipMembers = []
 
 def extractLists(lists):
     boardLists = {}
@@ -58,13 +42,14 @@ def extractCards(cardsDict,lists,members):
         # card['idLabels'] -> []
         # card['idList'] -> list ID
         # card['idMembers'] -> [member ids]
-        newCard = {'name': card.get('name'),
-            'idList': card.get('idList'),
-            'idMembers': card.get('idMembers'),
-            'labels': card.get('idLabels')}
-        cards[card.get('id')] = newCard
-        if card.get('idList') in lists:
-            lists.get(card.get('idList')).get('cards').append(newCard)
+        if not card.get('closed'):
+            newCard = {'name': card.get('name'),
+                'idList': card.get('idList'),
+                'idMembers': card.get('idMembers'),
+                'labels': card.get('idLabels')}
+            cards[card.get('id')] = newCard
+            if card.get('idList') in lists:
+                lists.get(card.get('idList')).get('cards').append(newCard)
     return cards
 
 def extractLabels(labelsDict):
@@ -87,22 +72,13 @@ def extractMembers(membersDict):
                         'Size - Large': 0,
                         'Unsized': 0},
                     'Shared': { }}}
-            for i in range(len(membersDict)):
+            for i in range(1,len(membersDict)+1):
                 newMember['cardsDone']['Shared'][i] = 0
             members[member.get('id')] = newMember
     return members
 
-# boardFilename is the filename of the JSON exported from Trello
-def extractJsonFromFile(boardFilename):
-    print("Extracting "+boardFilename+"...")
-    with open(boardFilename,'r') as jsonFile:
-        return json.load(jsonFile)
-    print("Error: Unable to extract \""+boardFilename+"\".")
-    exit()
-
 # members is a dict of members to object of their counts
 def countCardsInListByLabels(listDict,labels,members):
-    print("Counting "+listDict.get('name')+" cards...")
     for card in listDict.get('cards'):
         for cardMember in card.get('idMembers'):
             members[cardMember]['cardsDone']['Shared'][len(card.get('idMembers'))] += 1
@@ -155,25 +131,65 @@ def writeBurndown(csvFilename,burndownDict,memberBreakdown=[]):
         three = member.get('cardsDone').get('Shared').get(3)
         four = member.get('cardsDone').get('Shared').get(4)
         five = member.get('cardsDone').get('Shared').get(5)
-        shareAverage = (one + 2*two + 3*three + 4*four + 5*five) / (one + two + three + four + five)
-        hours = (small * 2 + medium * 4 + large * 8) / shareAverage
+        try:
+            shareAverage = (one + 2*two + 3*three + 4*four + 5*five) / (one + two + three + four + five)
+            hours = (small * 2 + medium * 4 + large * 8) / shareAverage
+        except ZeroDivisionError:
+            print("Warning: "+member.get('name')+" has not worked on any cards")
+            shareAverage = 0
+            hours = 0
         data.append([member.get('name'),hours,small,medium,large,one,two,three,four,five,shareAverage])
     with open(csvFilename,'w') as csvfile:
         csvwriter = csv.writer(csvfile,delimiter=',',quotechar='|',quoting=csv.QUOTE_MINIMAL)
         for dataRow in data:
             csvwriter.writerow(dataRow)
+
+def configure(batchFilename):
+    with open(batchFilename,'r') as batchFile:
+        configuration = json.loads(batchFile.read())
+        if 'skipMembers' in configuration:
+            global skipMembers
+            skipMembers = configuration.get('skipMembers')
+        for newBoard in configuration.get('boards'):
+            boards.append(newBoard)
+
+def runBatch():
+    for board in boards:
+        global teamKanbanLabels
+        global teamPriorityLabels
+        global teamSizeLabels
+        initializeGlobals()
+        teamKanbanLabels = board.get('teamKanbanLabels')
+        teamPriorityLabels = board.get('teamPriorityLabels')
+        teamSizeLabels = board.get('teamSizeLabels')
+        boardJson = retrieveJsonFromURL(board.get('url'))
+        burndownFilename = "csv/"+boardJson.get('name')+'.csv'
+        writeBurndown(burndownFilename,analyzeSprint(boardJson),
+            ['Biz/Dev Backlog',
+             'Biz/Dev In Progress',
+             'Biz/Dev In Review'])
+
+        
+def retrieveJsonFromURL(url):
+    return json.loads(requests.request("GET", url, params=querystring).text)
+
+def initializeGlobals():
+    global teamKanbanLabels
+    global kanbanLists
+    global teamPriorityLabels
+    global priorityLabels
+    global teamSizeLabels
+    global sizeLabels
+    teamKanbanLabels = {}
+    kanbanLists = {}
+    teamPriorityLabels = {}
+    priorityLabels = {}
+    teamSizeLabels = {}
+    sizeLabels = {}
     
 if __name__ == '__main__':
     args = parser.parse_args()
-    if args.url is not None:
-        with open(args.url,'r') as urlFile:
-            urlStr = urlFile.read().strip()
-            boardJson = json.loads(requests.request("GET", urlStr, params=querystring).text)
-    elif args.filename is not None:
-        boardJson = extractJsonFromFile(args.Board)
-    burndownFilename = "csv/"+boardJson.get('name')+".csv"
-    writeBurndown(burndownFilename,analyzeSprint(boardJson),
-        ['Biz/Dev In Progress',
-         'Biz/Dev In Review',
-         'Biz/Dev Done'])
+    if args.boards is not None:
+        configure(args.boards)
+        runBatch()
         
