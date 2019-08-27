@@ -158,9 +158,12 @@ def runBatch():
         global teamKanbanLabels
         global teamPriorityLabels
         global teamSizeLabels
+        if 'skipMembers' in board:
+            global skipMembers
+            skipMembers = board.get('skipMembers')
         initializeGlobals()
         teamKanbanLabels = board.get('teamKanbanLabels')
-        teamPriorityLabels = board.get('teamPriorityLabels')
+        teamPriorityLabels = board.get('teamPriorityLabels') if 'teamPriorityLabels' in board else {}
         teamSizeLabels = board.get('teamSizeLabels')
         boardJson = retrieveJsonFromURL(board.get('url'))
         burndownFilename = "csv/"+boardJson.get('name')+'.csv'
